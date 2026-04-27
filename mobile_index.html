@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STI Version Checker</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">Software Version Checker</h1>
+            <p class="subtitle">Check if software versions are safe to use</p>
+        </header>
+
+        <main class="main-content">
+            <section class="check-section">
+                <div class="input-group">
+                    <label for="versionInput" class="label">Enter versions to check (one per line):</label>
+                    <textarea
+                        id="versionInput"
+                        class="textarea"
+                        placeholder="10.66.16.00a&#10;Version10.66.16.00a&#10;v10.66.16.00a_S05_x64_2019.zip"
+                        style="min-height: 150px; font-family: 'Consolas', 'Monaco', monospace;"
+                    ></textarea>
+                </div>
+
+                <div id="statusBar" style="
+                    background-color: var(--bg-secondary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 6px;
+                    padding: 12px 16px;
+                    color: var(--text-secondary);
+                    font-size: 14px;
+                    text-align: center;
+                    margin-top: 16px;
+                ">
+                    Loading public blocklist...
+                </div>
+
+                <div id="blocklistInfo" class="text-muted" style="font-size: 12px; text-align: center;"></div>
+            </section>
+
+            <section class="result-section">
+                <div class="result-card">
+                    <table class="versions-table" id="resultsTable">
+                        <thead>
+                            <tr>
+                                <th>Input Version</th>
+                                <th>Status</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                            <tr>
+                                <td colspan="3" class="result-placeholder">
+                                    Enter versions above to see results
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p class="text-muted" style="font-size: 12px;">
+                Screenshots are not proof of version status. Confirm against the latest published blocklist when needed.
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        const PUBLIC_BLOCKLIST_URL = './public_blocklist.json';
+        const CHECK_DELAY = 500;
+
+        const NORMALIZED_VERSION_PATTERN = /^\d+\.\d+\.\d+\.\d+[a-z]{1,2}\d*$/;
+        const RELEASE_BETA_PATTERN = /^\d+\.\d+\.\d+\.\d+[a-z]{1,2}$/;
+        const VERSION_PREFIX_PATTERN = /^(?:Version|v)/i;
+
+        let checkTimeout = null;
+        let publicBlocklist = null;
+
+        const versionInput = document.getElementById('versionInput');
+        const resultsBody = document.getElementById('resultsBody');
+        const statusBar = document.getElementById('statusBar');
+        const blocklistInfo = document.getElementById('blocklistInfo');
+
+        document.addEventListener('DOMContentLoaded', async function() {
+            await loadPublicBlocklist();
+            versionInput.focus();
+        });
+
+        versionInput.addEventListener('input', function() {
+            clearTimeout(checkTimeout);
+            const versions = parseVersions(versionInput.value);
+
+            if (versions.length === 0) {
+                showEmptyState();
+                statusBar.textContent = publicBlocklist
+                    ? 'Ready - Enter versions to check'
+                    : 'Public blocklist is not loaded';
+                return;
+            }
+
+            statusBar.textContent = 'Typing...';
+            checkTimeout = setTimeout(() => checkVersions(versions), CHECK_DELAY);
+        });
+
+        async function loadPublicBlocklist() {
+            try {
+                const response = await fetch(PUBLIC_BLOCKLIST_URL, {
+                    cache: 'no-store'
+                });
+
+                const data = await response.json().catch(() => null);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                if (!data || data.schema_version !== 1 || !data.blocked_versions) {
+                    throw new Error('Invalid public blocklist format');
+                }
+
+                publicBlocklist = data;
+
+                const shortHash = data.content_hash
+                    ? data.content_hash.slice(0, 12)
+                    : 'unknown';
+
+                statusBar.textContent = 'Ready - Enter versions to check';
+                blocklistInfo.textContent =
+                    `Blocklist generated: ${data.generated_at || 'unknown'} | Hash: ${shortHash}`;
+            } catch (error) {
+                publicBlocklist = null;
+                statusBar.textContent = 'Failed to load public blocklist';
+                blocklistInfo.textContent = error.message;
+            }
+        }
+
+        function parseVersions(text) {
+            return text
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+        }
+
+        function normalizeVersionIdentifier(version) {
+            if (typeof version !== 'string') {
+                throw new Error('Version must be a string');
+            }
+
+            let candidate = version.trim();
+
+            if (!candidate) {
+                throw new Error('Version cannot be empty');
+            }
+
+            const pathParts = candidate.split(/[\\/]+/);
+            candidate = pathParts[pathParts.length - 1];
+
+            if (candidate.toLowerCase().endsWith('.zip')) {
+                candidate = candidate.slice(0, -4);
+            }
+
+            candidate = candidate.split('_', 1)[0];
+            candidate = candidate.replace(VERSION_PREFIX_PATTERN, '');
+
+            if (candidate.length < 1) {
+                throw new Error(`Invalid version format: ${version}`);
+            }
+
+            const suffixMatch = candidate.match(/^(.*?)([a-zA-Z]{1,2})(\d*)$/);
+
+            if (!suffixMatch) {
+                throw new Error(`Invalid version format: ${version}`);
+            }
+
+            candidate = suffixMatch[1] + suffixMatch[2].toLowerCase() + suffixMatch[3];
+
+            if (!NORMALIZED_VERSION_PATTERN.test(candidate)) {
+                throw new Error(`Invalid version format: ${version}`);
+            }
+
+            return candidate;
+        }
+
+        function isBetaVersion(version) {
+            const normalizedVersion = normalizeVersionIdentifier(version);
+            return RELEASE_BETA_PATTERN.test(normalizedVersion);
+        }
+
+        function getBetaBaseVersion(version) {
+            const normalizedVersion = normalizeVersionIdentifier(version);
+            const match = normalizedVersion.match(/^(\d+\.\d+\.\d+\.\d+[a-z]{1,2})/);
+
+            if (match) {
+                return match[1];
+            }
+
+            return normalizedVersion;
+        }
+
+        function getPublicCheckResult(version) {
+            if (!publicBlocklist) {
+                return {
+                    error: true,
+                    message: 'Public blocklist is not loaded'
+                };
+            }
+
+            let normalizedVersion;
+
+            try {
+                normalizedVersion = normalizeVersionIdentifier(version);
+            } catch (error) {
+                return {
+                    error: true,
+                    message: error.message
+                };
+            }
+
+            const blockedVersions = publicBlocklist.blocked_versions || {};
+            let blockedData = blockedVersions[normalizedVersion];
+
+            if (!blockedData && isBetaVersion(normalizedVersion)) {
+                const betaBase = getBetaBaseVersion(normalizedVersion);
+                blockedData = blockedVersions[betaBase];
+            }
+
+            if (blockedData) {
+                return {
+                    safe: false,
+                    reason: blockedData.customer_message,
+                    checked_version: normalizedVersion,
+                    original_version: version
+                };
+            }
+
+            return {
+                safe: true,
+                reason: 'Version is safe for production',
+                checked_version: normalizedVersion,
+                original_version: version
+            };
+        }
+
+        function showEmptyState() {
+            resultsBody.innerHTML = `
+                <tr>
+                    <td colspan="3" class="result-placeholder">
+                        Enter versions above to see results
+                    </td>
+                </tr>
+            `;
+        }
+
+        function checkVersions(versions) {
+            let safeCount = 0;
+            let blockedCount = 0;
+            const results = [];
+
+            for (const version of versions) {
+                const result = getPublicCheckResult(version);
+                results.push({
+                    version,
+                    result
+                });
+
+                if (!result.error && result.safe) {
+                    safeCount++;
+                } else if (!result.error && !result.safe) {
+                    blockedCount++;
+                }
+            }
+
+            let html = '';
+
+            results.forEach(({ version, result }) => {
+                if (result.error) {
+                    html += `
+                        <tr data-version="${escapeHtml(version)}">
+                            <td class="table-version">${escapeHtml(version)}</td>
+                            <td><span style="color: var(--danger-color); font-weight: 600;">⚠️ ERROR</span></td>
+                            <td>${escapeHtml(result.message || 'Failed to check version')}</td>
+                        </tr>
+                    `;
+                } else if (result.safe) {
+                    html += `
+                        <tr data-version="${escapeHtml(version)}">
+                            <td class="table-version">${escapeHtml(version)}</td>
+                            <td><span style="color: var(--success-color); font-weight: 600;">✅ SAFE</span></td>
+                            <td>${escapeHtml(result.reason)}</td>
+                        </tr>
+                    `;
+                } else {
+                    html += `
+                        <tr data-version="${escapeHtml(version)}">
+                            <td class="table-version">${escapeHtml(version)}</td>
+                            <td><span style="color: var(--danger-color); font-weight: 600;">🚫 BLOCKED</span></td>
+                            <td>${escapeHtml(result.reason)}</td>
+                        </tr>
+                    `;
+                }
+            });
+
+            resultsBody.innerHTML = html;
+            statusBar.textContent =
+                `Checked ${versions.length} version(s) - ${safeCount} safe, ${blockedCount} blocked`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
