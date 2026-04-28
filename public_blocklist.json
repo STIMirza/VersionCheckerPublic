@@ -5,9 +5,6 @@
     },
     "10.66.16.00a001": {
       "customer_message": "Critical bug"
-    },
-    "10.66.16.00a002": {
-      "customer_message": "Critical bug in testing"
     }
   },
   "content_hash": "0feb8249fdbd2c4fcc0ddcaf62e56582ff301a73be2c601224735f031040f1f3",
